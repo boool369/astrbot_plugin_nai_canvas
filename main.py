@@ -122,7 +122,6 @@ class NAICanvas(Star):
         self.llm_api_base_url = self._normalize_api_base_url(self.config.get("llm_api_base_url", "https://api.siliconflow.cn/v1"))
         self.llm_model_name = self.config.get("llm_model_name", "Qwen/Qwen2-7B-Instruct")
 
-        # 初始化默认预设指针
         self.current_default = "默认"
         self.presets = self._load_presets()
 
@@ -136,33 +135,26 @@ class NAICanvas(Star):
                 "negative": "nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page, worst quality,low quality,artist collaboration, bad anatomy,extra fingers,extra legs, missing legs, missing fingers, mutation, text, watermark, low resolution"
             }
         }
-        
-        presets = {}
-        if self.presets_file.exists():
-            try:
-                with open(self.presets_file, 'r', encoding='utf-8') as f:
-                    presets = json.load(f)
-            except (json.JSONDecodeError, IOError) as e:
-                logger.error(f"加载提示词文件失败: {e}")
-        
-        # 如果没有"默认"，合并初始默认
-        if "默认" not in presets:
-            presets.update(default_preset)
-            
-        # 读取保存的当前默认选择
-        if "_CONFIG_ACTIVE_PRESET_" in presets:
-            saved_default = presets["_CONFIG_ACTIVE_PRESET_"]
-            if isinstance(saved_default, str) and saved_default in presets:
-                self.current_default = saved_default
-            else:
-                self.current_default = "默认"
-        else:
-            self.current_default = "默认"
-
         if not self.presets_file.exists():
-            self._save_presets(presets)
-            
-        return presets
+            self._save_presets(default_preset)
+            return default_preset
+        try:
+            with open(self.presets_file, 'r', encoding='utf-8') as f:
+                presets = json.load(f)
+                if "默认" not in presets: presets.update(default_preset)
+                
+                if "_CONFIG_ACTIVE_PRESET_" in presets:
+                    saved_default = presets["_CONFIG_ACTIVE_PRESET_"]
+                    if isinstance(saved_default, str) and saved_default in presets:
+                        self.current_default = saved_default
+                    else:
+                        self.current_default = "默认"
+                else:
+                    self.current_default = "默认"
+                return presets
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"加载提示词文件失败: {e}")
+            return default_preset
 
     def _save_presets(self, presets_data):
         try:
@@ -587,8 +579,7 @@ class NAICanvas(Star):
             if not name:
                 yield event.plain_result("❌ 错误：预设名称不能为空。")
                 return
-            # 移除对"默认"的覆盖检查，允许用户修改"默认"预设本身，或者其他任何预设
-
+            
             self.presets[name] = {"positive": positive, "negative": negative}
             
             if self._save_presets(self.presets):
