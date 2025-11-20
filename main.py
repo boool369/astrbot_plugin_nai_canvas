@@ -122,6 +122,8 @@ class NAICanvas(Star):
         self.llm_api_base_url = self._normalize_api_base_url(self.config.get("llm_api_base_url", "https://api.siliconflow.cn/v1"))
         self.llm_model_name = self.config.get("llm_model_name", "Qwen/Qwen2-7B-Instruct")
 
+        # 初始化默认预设指针
+        self.current_default = "默认"
         self.presets = self._load_presets()
 
     def is_admin(self, event: AstrMessageEvent) -> bool:
@@ -134,17 +136,33 @@ class NAICanvas(Star):
                 "negative": "nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page, worst quality,low quality,artist collaboration, bad anatomy,extra fingers,extra legs, missing legs, missing fingers, mutation, text, watermark, low resolution"
             }
         }
+        
+        presets = {}
+        if self.presets_file.exists():
+            try:
+                with open(self.presets_file, 'r', encoding='utf-8') as f:
+                    presets = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"加载提示词文件失败: {e}")
+        
+        # 如果没有"默认"，合并初始默认
+        if "默认" not in presets:
+            presets.update(default_preset)
+            
+        # 读取保存的当前默认选择
+        if "_CONFIG_ACTIVE_PRESET_" in presets:
+            saved_default = presets["_CONFIG_ACTIVE_PRESET_"]
+            if isinstance(saved_default, str) and saved_default in presets:
+                self.current_default = saved_default
+            else:
+                self.current_default = "默认"
+        else:
+            self.current_default = "默认"
+
         if not self.presets_file.exists():
-            self._save_presets(default_preset)
-            return default_preset
-        try:
-            with open(self.presets_file, 'r', encoding='utf-8') as f:
-                presets = json.load(f)
-                if "默认" not in presets: presets.update(default_preset)
-                return presets
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"加载提示词文件失败: {e}")
-            return default_preset
+            self._save_presets(presets)
+            
+        return presets
 
     def _save_presets(self, presets_data):
         try:
@@ -371,13 +389,23 @@ class NAICanvas(Star):
         ====================================
         核心绘图命令: /nai生图
         用法: /nai生图 [预设名] <内容>
-        说明: 如果不指定[预设名]，将自动使用“默认”预设。
+        说明: 如果不指定[预设名]，将自动使用当前的默认预设。
 
+        1. 切换默认画风
+           /nai切换默认 <预设名>
+           示例: /nai切换默认 像素风
+           (之后直接发 /nai生图 就会用像素风)
+
+        2. 临时指定画风
+           /nai生图 <预设名> <内容>
+           示例: /nai生图 JoJo画风 一个女孩
+           (仅本次生效，不改变默认设置)
+
+        ====================================
         插件会智能区分两种模式：
 
         一、智能模式 (用于简单/详细描述)
         当您的输入是自然语言时 (如“一个女孩”)，插件会进行创意扩写或翻译，并将结果与预设的【正向】提示词【融合】，同时使用预设的【反向】提示词。
-        示例: /nai生图 一个穿白裙的女孩在海边
 
         二、专业模式 (用于专业提示词/画师串)
         当您的输入是专业提示词格式时，将启用精确的【覆盖】逻辑，规则如下：
@@ -425,7 +453,7 @@ class NAICanvas(Star):
         args_str = self._get_clean_args(event.message_str, aliases)
 
         if not args_str:
-            yield event.plain_result("用法: /nai生图 <你的描述或专业提示词>")
+            yield event.plain_result(f"当前默认画风: 【{self.current_default}】\n用法: /nai生图 <你的描述或专业提示词>")
             return
         
         try:
@@ -439,9 +467,12 @@ class NAICanvas(Star):
                 user_negative_raw = parts[1].strip()
 
             # 2. 解析预设名和核心提示词
-            preset_name, user_prompt_for_llm = "默认", user_positive_raw
+            # 默认使用当前选中的 presets，而不是硬编码的 "默认"
+            preset_name, user_prompt_for_llm = self.current_default, user_positive_raw
+            
             parts = user_positive_raw.split(maxsplit=1)
-            if len(parts) > 1 and parts[0] in self.presets:
+            # 如果用户输入的第一个词是一个存在的预设名，则临时覆盖默认值 (排除内部配置key)
+            if len(parts) > 1 and parts[0] in self.presets and not parts[0].startswith("_CONFIG_"):
                 preset_name, user_prompt_for_llm = parts[0], parts[1]
             
             preset = self.presets.get(preset_name, {})
@@ -462,10 +493,10 @@ class NAICanvas(Star):
                 # 智能模式：融合逻辑
                 if strategy in ['expand', 'translate_and_tagify']:
                     if strategy == 'expand':
-                        status_message = "Nai绘图：识别为简单描述，正在创意扩写..."
+                        status_message = f"Nai绘图({preset_name})：识别为简单描述，正在创意扩写..."
                         processed_positive = await self._expand_simple_prompt(user_prompt_for_llm)
                     else: # translate_and_tagify
-                        status_message = "Nai绘图：识别为详细描述，正在翻译..."
+                        status_message = f"Nai绘图({preset_name})：识别为详细描述，正在翻译..."
                         processed_positive = await self._translate_chinese_prompt(user_prompt_for_llm)
                     
                     final_positive = f"{preset_positive}, {processed_positive}" if preset_positive else processed_positive
@@ -473,7 +504,7 @@ class NAICanvas(Star):
 
                 # 专业模式：覆盖逻辑
                 elif strategy == 'process_directly':
-                    status_message = "Nai绘图：识别为专业提示词，正在处理..."
+                    status_message = f"Nai绘图({preset_name})：识别为专业提示词，正在处理..."
                     
                     # 根据'|'的存在和内容决定正反向提示词
                     if has_separator:
@@ -493,7 +524,7 @@ class NAICanvas(Star):
                 else:
                     raise ValueError(f"LLM返回了未知的处理策略: {strategy}")
             else: # LLM增强关闭，默认按专业模式的覆盖逻辑处理
-                status_message = "Nai绘图：正在处理您的请求..."
+                status_message = f"Nai绘图({preset_name})：正在处理您的请求..."
                 if has_separator:
                     if user_positive_raw: final_positive = await self._process_mixed_prompt(user_positive_raw)
                     else: final_positive = preset_positive
@@ -535,15 +566,12 @@ class NAICanvas(Star):
 
     @filter.command("nai增加提示词")
     async def handle_nai_add_preset(self, event: AstrMessageEvent):
-        # 1. 权限检查：增加反馈提示，不再静默失败
         if not self.is_admin(event):
             yield event.plain_result("❌ 权限不足：只有配置在 AstrBot admins_id 中的管理员才能添加提示词。")
             return
         
         aliases = ["nai增加提示词"]
         args_str = self._get_clean_args(event.message_str, aliases)
-
-        # 2. 关键修复：兼容中文输入法的全角竖线 "｜" -> 半角 "|"
         args_str = args_str.replace("｜", "|")
 
         try:
@@ -552,26 +580,18 @@ class NAICanvas(Star):
             if len(parts) < 2: 
                 raise ValueError("参数不足")
             
-            # 3. 关键修复：使用 strip() 去除名称和提示词前后的多余空格
             name = parts[0].strip()
             positive = parts[1].strip()
-            # 如果有第三部分(反向)则提取并去空格，否则为空
             negative = parts[2].strip() if len(parts) > 2 else ""
 
-            # 校验名称合法性
             if not name:
                 yield event.plain_result("❌ 错误：预设名称不能为空。")
                 return
-            if name == "默认":
-                yield event.plain_result("❌ 错误：不能直接覆盖 '默认' 预设，请使用其他名称。")
-                return
+            # 移除对"默认"的覆盖检查，允许用户修改"默认"预设本身，或者其他任何预设
 
-            # 更新内存中的字典
             self.presets[name] = {"positive": positive, "negative": negative}
             
-            # 保存到文件
             if self._save_presets(self.presets):
-                # 4. 成功反馈优化：显示简略信息
                 preview_msg = f"✅ 提示词预设 '{name}' 已保存！\n"
                 preview_msg += f"🟢 正向: {positive[:30]}..." if len(positive) > 30 else f"🟢 正向: {positive}"
                 if negative:
@@ -595,20 +615,62 @@ class NAICanvas(Star):
         aliases = ["nai删除提示词"]
         name = self._get_clean_args(event.message_str, aliases)
         if not name: yield event.plain_result("请输入要删除的提示词名称。"); return
-        if name == "默认": yield event.plain_result("错误：不能删除'默认'提示词。"); return
+        
         if name in self.presets:
             del self.presets[name]
+            # 如果删除了当前默认的，重置回"默认"
+            if self.current_default == name:
+                self.current_default = "默认"
+                self.presets["_CONFIG_ACTIVE_PRESET_"] = "默认"
+
             if self._save_presets(self.presets):
                 yield event.plain_result(f"成功删除提示词: '{name}'")
             else: yield event.plain_result("保存提示词文件失败。")
         else: yield event.plain_result(f"未找到名为 '{name}' 的提示词。")
 
+    @filter.command("nai切换默认")
+    async def handle_nai_switch_preset(self, event: AstrMessageEvent):
+        if not self.is_admin(event):
+            yield event.plain_result("❌ 只有管理员可以切换默认画风。")
+            return
+
+        aliases = ["nai切换默认"]
+        target_preset = self._get_clean_args(event.message_str, aliases)
+
+        if not target_preset:
+            yield event.plain_result(f"当前默认画风为：【{self.current_default}】\n请指定要切换的名称，例如：/nai切换默认 像素风")
+            return
+
+        if target_preset not in self.presets:
+            yield event.plain_result(f"❌ 找不到名为 '{target_preset}' 的预设。请先使用 /nai提示词列表 查看。")
+            return
+        
+        if target_preset.startswith("_CONFIG_"):
+             yield event.plain_result("❌ 这是一个内部配置项，不能作为画风。")
+             return
+
+        self.current_default = target_preset
+        self.presets["_CONFIG_ACTIVE_PRESET_"] = target_preset
+        
+        if self._save_presets(self.presets):
+            yield event.plain_result(f"✅ 切换成功！\n现在的默认画风已设定为：【{target_preset}】\n以后直接发送 /nai生图 将使用此风格。")
+        else:
+            yield event.plain_result(f"⚠️ 切换成功但保存失败（重启后会失效）。当前：{target_preset}")
+
     @filter.command("nai提示词列表")
     async def handle_nai_list_presets(self, event: AstrMessageEvent):
         if not self.presets:
             yield event.plain_result("当前没有可用的提示词。"); return
-        names = list(self.presets.keys())
-        message = "可用提示词列表\n\n- " + "\n- ".join(names)
+        
+        names = []
+        for k in self.presets.keys():
+            if k.startswith("_CONFIG_"): continue
+            if k == self.current_default:
+                names.append(f"{k} (当前默认 ⭐)")
+            else:
+                names.append(k)
+        
+        message = "可用提示词列表:\n\n- " + "\n- ".join(names)
         yield event.plain_result(message)
 
     @filter.command("nai查看提示词")
