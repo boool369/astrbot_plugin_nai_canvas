@@ -31,19 +31,19 @@ class NAICanvas(Star):
 
         **处理策略定义 (按此顺序判断)：**
         1.  **简单描述 (Strategy: `expand`)**: 输入是只包含一个**核心主体**和少量修-饰词的自然语言短语，缺乏场景、构图等细节。
-            *   **处理方式：** 提取整个短语用于后续的创意扩写。
-            *   **示例输入:** '一个女孩', '夜晚的城市', 'a cute catgirl'
-            *   **输出JSON:** `{\"processing_strategy\": \"expand\", \"content\": {\"prompt\": \"a cute catgirl\"}}`
+            * **处理方式：** 提取整个短语用于后续的创意扩写。
+            * **示例输入:** '一个女孩', '夜晚的城市', 'a cute catgirl'
+            * **输出JSON:** `{\"processing_strategy\": \"expand\", \"content\": {\"prompt\": \"a cute catgirl\"}}`
 
         2.  **详细描述 (Strategy: `translate_and_tagify`)**: 输入是描述了**具体场景、人物、动作、服装**等丰富细节的自然语言句子。
-            *   **处理方式：** 提取整个句子用于后续的翻译和标签化。
-            *   **示例输入:** '一个穿着白色连衣裙的女孩在雨中散步'
-            *   **输出JSON:** `{\"processing_strategy\": \"translate_and_tagify\", \"content\": {\"prompt\": \"一个穿着白色连衣裙的女孩在雨中散步\"}}`
+            * **处理方式：** 提取整个句子用于后续的翻译和标签化。
+            * **示例输入:** '一个穿着白色连衣裙的女孩在雨中散步'
+            * **输出JSON:** `{\"processing_strategy\": \"translate_and_tagify\", \"content\": {\"prompt\": \"一个穿着白色连衣裙的女孩在雨中散步\"}}`
 
         3.  **专业提示词 (Strategy: `process_directly`)**: 输入包含大量逗号分隔的**英文标签**或特殊权重语法（如`::`, `{}`, `[]`）。
-            *   **处理方式：** 直接提取整个输入内容。
-            *   **示例输入:** `masterpiece, best quality, 1girl, a girl in the rain`
-            *   **输出JSON:** `{\"processing_strategy\": \"process_directly\", \"content\": {\"prompt\": \"masterpiece, best quality, 1girl, a girl in the rain\"}}`
+            * **处理方式：** 直接提取整个输入内容。
+            * **示例输入:** `masterpiece, best quality, 1girl, a girl in the rain`
+            * **输出JSON:** `{\"processing_strategy\": \"process_directly\", \"content\": {\"prompt\": \"masterpiece, best quality, 1girl, a girl in the rain\"}}`
 
         **输出格式强制要求：**
         - 你的回复**必须**是一个**纯净的、不含任何杂质的JSON对象**。
@@ -383,20 +383,20 @@ class NAICanvas(Star):
         当您的输入是专业提示词格式时，将启用精确的【覆盖】逻辑，规则如下：
 
         1. 只有正向提示词 (无“|”)
-           /nai生图 1girl, masterpiece
-           效果: 【覆盖】预设正向，【使用】预设反向。
+            /nai生图 1girl, masterpiece
+            效果: 【覆盖】预设正向，【使用】预设反向。
 
         2. 正向 | 反向
-           /nai生图 1girl | lowres, bad hands
-           效果: 【覆盖】预设正向，【覆盖】预设反向。
+            /nai生图 1girl | lowres, bad hands
+            效果: 【覆盖】预设正向，【覆盖】预设反向。
 
         3. 正向 | (反向为空)
-           /nai生图 1girl, masterpiece |
-           效果: 【覆盖】预设正向，【使用】预设反向。
+            /nai生图 1girl, masterpiece |
+            效果: 【覆盖】预设正向，【使用】预设反向。
 
         4. | 反向 (正向为空)
-           /nai生图 | lowres, bad hands
-           效果: 【使用】预设正向，【覆盖】预设反向。
+            /nai生图 | lowres, bad hands
+            效果: 【使用】预设正向，【覆盖】预设反向。
 
         ====================================
         提示词管理命令:
@@ -534,58 +534,59 @@ class NAICanvas(Star):
             yield event.plain_result("生成帮助文本时遇到错误。")
 
     @filter.command("nai增加提示词")
-        async def handle_nai_add_preset(self, event: AstrMessageEvent):
-            # 1. 权限检查：增加反馈提示，不再静默失败
-            if not self.is_admin(event):
-                yield event.plain_result("❌ 权限不足：只有配置在 AstrBot admins_id 中的管理员才能添加提示词。")
-                return
+    async def handle_nai_add_preset(self, event: AstrMessageEvent):
+        # 1. 权限检查：增加反馈提示，不再静默失败
+        if not self.is_admin(event):
+            yield event.plain_result("❌ 权限不足：只有配置在 AstrBot admins_id 中的管理员才能添加提示词。")
+            return
+        
+        aliases = ["nai增加提示词"]
+        args_str = self._get_clean_args(event.message_str, aliases)
+
+        # 2. 关键修复：兼容中文输入法的全角竖线 "｜" -> 半角 "|"
+        args_str = args_str.replace("｜", "|")
+
+        try:
+            parts = args_str.split('|', 2)
             
-            aliases = ["nai增加提示词"]
-            args_str = self._get_clean_args(event.message_str, aliases)
-    
-            # 2. 关键修复：兼容中文输入法的全角竖线 "｜" -> 半角 "|"
-            args_str = args_str.replace("｜", "|")
-    
-            try:
-                parts = args_str.split('|', 2)
+            if len(parts) < 2: 
+                raise ValueError("参数不足")
+            
+            # 3. 关键修复：使用 strip() 去除名称和提示词前后的多余空格
+            name = parts[0].strip()
+            positive = parts[1].strip()
+            # 如果有第三部分(反向)则提取并去空格，否则为空
+            negative = parts[2].strip() if len(parts) > 2 else ""
+
+            # 校验名称合法性
+            if not name:
+                yield event.plain_result("❌ 错误：预设名称不能为空。")
+                return
+            if name == "默认":
+                yield event.plain_result("❌ 错误：不能直接覆盖 '默认' 预设，请使用其他名称。")
+                return
+
+            # 更新内存中的字典
+            self.presets[name] = {"positive": positive, "negative": negative}
+            
+            # 保存到文件
+            if self._save_presets(self.presets):
+                # 4. 成功反馈优化：显示简略信息
+                preview_msg = f"✅ 提示词预设 '{name}' 已保存！\n"
+                preview_msg += f"🟢 正向: {positive[:30]}..." if len(positive) > 30 else f"🟢 正向: {positive}"
+                if negative:
+                    preview_msg += f"\n🔴 反向: {negative[:30]}..." if len(negative) > 30 else f"\n🔴 反向: {negative}"
                 
-                if len(parts) < 2: 
-                    raise ValueError("参数不足")
-                
-                # 3. 关键修复：使用 strip() 去除名称和提示词前后的多余空格
-                name = parts[0].strip()
-                positive = parts[1].strip()
-                # 如果有第三部分(反向)则提取并去空格，否则为空
-                negative = parts[2].strip() if len(parts) > 2 else ""
-    
-                # 校验名称合法性
-                if not name:
-                    yield event.plain_result("❌ 错误：预设名称不能为空。")
-                    return
-                if name == "默认":
-                    yield event.plain_result("❌ 错误：不能直接覆盖 '默认' 预设，请使用其他名称。")
-                    return
-    
-                # 更新内存中的字典
-                self.presets[name] = {"positive": positive, "negative": negative}
-                
-                # 保存到文件
-                if self._save_presets(self.presets):
-                    # 4. 成功反馈优化：显示简略信息
-                    preview_msg = f"✅ 提示词预设 '{name}' 已保存！\n"
-                    preview_msg += f"🟢 正向: {positive[:30]}..." if len(positive) > 30 else f"🟢 正向: {positive}"
-                    if negative:
-                        preview_msg += f"\n🔴 反向: {negative[:30]}..." if len(negative) > 30 else f"\n🔴 反向: {negative}"
-                    
-                    yield event.plain_result(preview_msg)
-                else:
-                    yield event.plain_result("❌ 保存失败：无法写入 user_presets.json 文件，请检查权限。")
-    
-            except ValueError:
-                yield event.plain_result("⚠️ 格式错误\n请使用: /nai增加提示词 名称 | 正向提示词 | 反向提示词(可选)")
-            except Exception as e:
-                logger.error(f"添加提示词运行时错误: {e}", exc_info=True)
-                yield event.plain_result(f"❌ 未知错误: {e}")
+                yield event.plain_result(preview_msg)
+            else:
+                yield event.plain_result("❌ 保存失败：无法写入 user_presets.json 文件，请检查权限。")
+
+        except ValueError:
+            yield event.plain_result("⚠️ 格式错误\n请使用: /nai增加提示词 名称 | 正向提示词 | 反向提示词(可选)")
+        except Exception as e:
+            logger.error(f"添加提示词运行时错误: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 未知错误: {e}")
+
     @filter.command("nai删除提示词")
     async def handle_nai_delete_preset(self, event: AstrMessageEvent):
         if not self.is_admin(event):
